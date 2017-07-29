@@ -1,113 +1,127 @@
 ---
-title: "Reproducible Research: Peer Assessment 1"
+title: "Practical Machine Learning: Course Project"
 output: 
 html_document:
 md_document:
 keep_md: false   
 ---
 
-```{r}
-library("ggplot2")
-library(dplyr)
-library(xtable)
-```
+## Executive Summary
+
+This document prensent the report of final assignment of Practical Machine Learning, wich is the 8th course on Specialization in Data science.
+
+The aim here is predict the manner in which they did the exercise. For this we bouilt the model, used the cross validation to choice the best model. 
+
+In this study, we only test two model: descision tree and Random forest. 
+
+## Data
+
+Given both training and test data from the following study:
+
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.
   
-## Loading and preprocessing the data
-# Loading the data
-```{r Load data, echo = TRUE}
-if(!file.exists("activity.csv")){
-    activity <- read.csv("activity.csv", header = TRUE, sep = ",")
-    summary(activity)
-}else
-{
-    unzip("activity.zip")
-    activity <- read.csv("activity.csv", header = TRUE, sep = ",")
-    summary(activity)
+The training data for this project are available here:
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available here:
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv 
+  
+## Package used 
+```{r}
+library(caret)
+```
+
+## Loading the data and Exploratory Analysis
+```{r}
+TrainFile <- "pml-training.csv"
+if (!file.exists(TrainFile)) {
+    url <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+    TrainFile <- "pml_training.csv"
+    download.file(url, destfile = TrainFile)
 }
-```
-  
-## What is mean total number of steps taken per day?
-  
-```{r}
-grpDate <- activity %>% 
-           group_by(date) %>% 
-           summarise(Total_steps=sum(steps,na.rm = TRUE))
+TrainData <- read.csv(TrainFile, na.strings = c("NA","#DIV/0!",""))
 
-Mean_Total_steps <- mean(grpDate$Total_steps, na.rm = TRUE)
-Median_Total_steps <-median(grpDate$Total_steps, na.rm = TRUE)
-# Make a plot 
-hist(grpDate$Total_steps,xlab="Total steps", ylab="Count",main = "Total steps per date",breaks = 10)
-abline(v=Mean_Total_steps,col = "blue",lwd=3)
-abline(v=Median_Total_steps,col = "red",lwd=3)
-legend(x="topright", legend=c("mean","median"), col=c("blue","red"), bty="n", lwd=3)
-```
-  
-The mean and median of the total number of steps taken per day are:  
-* Mean = `r Mean_Total_steps`  
-* Median = `r Median_Total_steps`  
-  
-## What is the average daily activity pattern?
-  
-```{r}
-grpInterval <- activity %>%
-              group_by(interval) %>%
-              summarise(Avrg=mean(steps,na.rm = TRUE))
-MaxIntervalAvrg <- grpInterval[grpInterval$Avrg==max(grpInterval$Avrg,na.rm = TRUE),]
-plot.new()
-plot(grpInterval$interval,grpInterval$Avrg, type = 'l',
-     xlab = 'Interval',ylab = 'Average by interval',main = 'Average by interval')
-```
-The 5-minute interval which contains the maximum number of steps is: `r MaxIntervalAvrg`  
-  
-## Imputing missing values  
-  
-Total of missing values.   
-```{r}
-Total_Missing_Value <- is.na(activity$steps)
-table(Total_Missing_Value)
-```
-  
-The missing values is raplace by the mean for that 5-minute interval. 
-  
-```{r}
-activity_copy <- activity
-for(ii in unique(activity_copy$interval))
-{
-activity_copy$steps[is.na(activity_copy$steps) & (activity_copy$interval == ii)] =  grpInterval$Avrg[grpInterval$interval==ii]
+TestFile <- "pml-testing.csv"
+if (!file.exists(TestFile)) {
+    url <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+    download.file(url, destfile = TestFile)
 }
+TestData <- read.csv(TestFile, na.strings = c("NA","#DIV/0!",""))
 ```
 
+## Cleaning Data
 ```{r}
-grpDateN <- activity_copy %>% 
-           group_by(date) %>% 
-           summarise(Total_steps=sum(steps,na.rm = TRUE))
+# remove variables with Nearly Zero Variance
+NZV <- nearZeroVar(TrainData)
+TrainData <- TrainData[, -NZV]
 
-Mean_Total_stepsN <- mean(grpDateN$Total_steps, na.rm = TRUE)
-Median_Total_stepsN <-median(grpDateN$Total_steps, na.rm = TRUE)
-# Make a plot 
-hist(grpDateN$Total_steps,xlab="Total steps", ylab="Count",main = "Total steps per date",breaks = 10)
-abline(v=Mean_Total_steps,col = "blue",lwd=1)
-abline(v=Median_Total_steps,col = "red",lwd=1)
-abline(v=Mean_Total_stepsN,col = "blue",lty=5,lwd=3)
-abline(v=Median_Total_stepsN,col = "red",lty=2,lwd=3)
-legend(x="topright", legend=c("mean","median","new mean","new median"), col=c("blue","red","blue","red"), bty="n", lwd=c(1,1,3,3),lty = c(1,1,5,2))
+# remove NA columun in train and test data
+TrainData<-TrainData[,colSums(is.na(TrainData)) == 0]
+
+# remove identification only variables (columns 1 to 5)
+
+TrainData <- TrainData[, -(1:5)]
+
+# Overview of train data using for calculation
+#str(TrainData)
+# Overview of test data using for calculation
+#str(TestData)
 ```
-# the new Mean and median steps for each date are:  
-* Mean = `r Mean_Total_stepsN`  
-* Median = `r Median_Total_stepsN` 
 
+## Find the best model 
+# Partitioning train data 
+```{r}
+# create a partition with the training dataset 
+inTrain  <- createDataPartition(TrainData$classe, p=0.7, list=FALSE)
+SubTrain <- TrainData[inTrain, ]
+SubTest  <- TrainData[-inTrain, ]
+```
 
-## Are there differences in activity patterns between weekdays and weekends?
+# Prediction used Decision Tree
 
 ```{r}
-activity_copy$DayG <- factor(weekdays(as.Date(activity_copy$date)) %in% c("samedi","dimanche"), 
-               labels=c("weekday","weekend"), ordered=FALSE)
-grpInterval  <- activity_copy %>% 
-                group_by(interval,DayG) %>% 
-                summarise(mean=mean(steps))
-p <- ggplot(grpInterval, aes(interval, mean))
-p <- p + geom_line(stat = "identity") + facet_grid(DayG ~.)
-p +labs(x="Interval", y="Average number of steps")
-ggsave("instructions_fig/sample_panelplot.png")
+set.seed(135)
+
+DecisionTreeModel2 <- train(classe ~ .,preProcess=c("center", "scale"), trControl=trainControl(method = "cv", number = 4), data=SubTrain, method="rpart")
+
+DecisionTreeModel2$finalModel
+
+# prediction on Test dataset
+DescisionTreepredict2 <- predict(DecisionTreeModel2, newdata=SubTest)
+confMatDT2 <- confusionMatrix(DescisionTreepredict2, SubTest$classe)
+print(confMatDT2,digit = 3)
+```
+
+# Prediction used Random Forest
+
+```{r}
+# model fit
+set.seed(135)
+controlRF <- trainControl(method="cv", number=3,verboseIter=FALSE)
+RandForestModel2 <- train(classe ~ .,preProcess=c("center", "scale"), data=SubTrain, method="rf",trControl=controlRF)
+RandForestModel2$finalModel
+
+# prediction on Test dataset
+RandForestpredict2 <- predict(RandForestModel2, newdata=SubTest)
+confMatRF2 <- confusionMatrix(RandForestpredict2, SubTest$classe)
+print(confMatRF2,digit = 3)
+```
+## Prediction on test data
+
+Finally, I tested two model: descision Tree and random forest. this with and without normalization 
+
+Summary of accuracy:
+
+1- Descision Tree with normalzation: accuracy =  0.579
+
+2- Random forest Tree with normalzation: accuracy = 0.998
+
+To make a prediction on test data, I used the best fit model. This mean the model witch give the higher accuracy: Random forest with normalization.
+
+```{r}
+predictResult <- predict(RandForestModel2, newdata=TestData)
+print(predictResult)
 ```
 
